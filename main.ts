@@ -9,31 +9,21 @@ export interface RgbRaster {
   data: Uint8Array;
 }
 
-export interface ColourMean {
-  r: number;
-  g: number;
-  b: number;
-}
-
 export interface SceneFeatures {
-  sky: ColourMean;
-  upper: ColourMean;
-  ground: ColourMean;
-  overall: ColourMean;
-  brightness: number;
-  saturation: number;
-  groundGreenness: number;
-  overallGreenness: number;
-  skyBlueness: number;
-  snowScore: number;
-  aridScore: number;
-  waterSkyBlueScore: number;
-  greyUrbanScore: number;
-  groundBrightness: number;
+  lush: number;
+  snow: number;
+  arid: number;
+  red: number;
+  pale: number;
+  darkveg: number;
+  yellow: number;
+  whiteline: number;
+  dry: number;
 }
 
-export type SceneClass = 'snow/boreal' | 'tropical lush' | 'arid/dry' | 'mediterranean'
-  | 'temperate green' | 'urban grey/overcast' | 'fallback';
+export type ZoneName = 'NA_temp' | 'CA_north' | 'MX' | 'BR' | 'SA_south' | 'EU_west'
+  | 'EU_north' | 'RU_west' | 'RU_east' | 'CAsia' | 'ME' | 'AF_sub' | 'AF_north'
+  | 'SAsia' | 'SEAsia' | 'EAsia' | 'AU' | 'NZ' | 'OCE';
 
 interface HuffmanTable {
   symbols: Map<number, number>;
@@ -67,14 +57,48 @@ interface ScanComponent {
   acTable: HuffmanTable | undefined;
 }
 
-const ANCHORS: Record<SceneClass, { lat: number; lon: number }> = {
-  'snow/boreal': { lat: 61.5, lon: 14.0 },
-  'tropical lush': { lat: 14.6, lon: 101.0 },
-  'arid/dry': { lat: 32.0, lon: -6.5 },
-  mediterranean: { lat: 39.5, lon: 2.5 },
-  'temperate green': { lat: 47.5, lon: 9.0 },
-  'urban grey/overcast': { lat: 50.5, lon: 4.5 },
-  fallback: { lat: 41.0, lon: -30.0 },
+const ZONES: { name: ZoneName; lat: number; lon: number; prior: number }[] = [
+  { name: 'NA_temp', lat: 39, lon: -98, prior: 1.0 },
+  { name: 'CA_north', lat: 56, lon: -106, prior: 0.7 },
+  { name: 'MX', lat: 23, lon: -102, prior: 0.8 },
+  { name: 'BR', lat: -12, lon: -53, prior: 1.1 },
+  { name: 'SA_south', lat: -32, lon: -64, prior: 0.75 },
+  { name: 'EU_west', lat: 48, lon: 10, prior: 0.9 },
+  { name: 'EU_north', lat: 62, lon: 15, prior: 0.6 },
+  { name: 'RU_west', lat: 55, lon: 45, prior: 1.1 },
+  { name: 'RU_east', lat: 58, lon: 110, prior: 0.8 },
+  { name: 'CAsia', lat: 48, lon: 68, prior: 0.6 },
+  { name: 'ME', lat: 29, lon: 47, prior: 0.6 },
+  { name: 'AF_sub', lat: 2, lon: 22, prior: 0.8 },
+  { name: 'AF_north', lat: 23, lon: 8, prior: 0.3 },
+  { name: 'SAsia', lat: 22, lon: 79, prior: 0.6 },
+  { name: 'SEAsia', lat: 13, lon: 102, prior: 0.8 },
+  { name: 'EAsia', lat: 35, lon: 118, prior: 0.6 },
+  { name: 'AU', lat: -25, lon: 134, prior: 0.5 },
+  { name: 'NZ', lat: -42, lon: 172, prior: 0.4 },
+  { name: 'OCE', lat: -12, lon: 156, prior: 0.3 },
+];
+
+const ZONE_CUE_SCORES: Partial<Record<ZoneName, Partial<Record<keyof SceneFeatures, number>>>> = {
+  NA_temp: { yellow: 3.0, snow: 1.5, arid: 1.2, pale: 1.5 },
+  CA_north: { yellow: 2.2, snow: 5.0, darkveg: 3.0 },
+  MX: { yellow: 2.6, red: 1.5, lush: 2.5 },
+  BR: { yellow: 2.6, red: 2.5, lush: 3.5 },
+  SA_south: { yellow: 1.6, red: 2.0, arid: 2.5, pale: 2.0, dry: 2.0 },
+  EU_west: { whiteline: 1.2 },
+  EU_north: { whiteline: 1.0, snow: 5.0, darkveg: 3.0 },
+  RU_west: { yellow: 0.8, whiteline: 0.8, snow: 5.0, darkveg: 3.0 },
+  RU_east: { yellow: 0.8, snow: 5.0, darkveg: 3.0, pale: 1.8 },
+  CAsia: { arid: 3.5, pale: 2.5, dry: 2.0 },
+  ME: { arid: 4.0, pale: 1.8, dry: 1.6 },
+  AF_sub: { red: 3.0, lush: 3.5 },
+  AF_north: { arid: 3.0 },
+  SAsia: { lush: 3.0 },
+  SEAsia: { lush: 4.0 },
+  EAsia: { whiteline: 0.8 },
+  AU: { red: 8.0, arid: 3.5, dry: 1.6 },
+  NZ: { whiteline: 1.2, lush: 2.6 },
+  OCE: { lush: 3.0, darkveg: 2.0 },
 };
 
 function requireRange(value: number, min: number, max: number, what: string): void {
@@ -526,150 +550,162 @@ export function decodeJpegDc(input: Uint8Array): RgbRaster | null {
   }
 }
 
-function averageBand(raster: RgbRaster, startRow: number, endRow: number): ColourMean {
-  const start = Math.max(0, Math.min(raster.height - 1, startRow));
-  const end = Math.max(start + 1, Math.min(raster.height, endRow));
-  let r = 0;
-  let g = 0;
-  let b = 0;
+function skylike(raster: RgbRaster, start: number, end: number): number {
+  let blueGreenPixels = 0;
+  let brightPixels = 0;
+  let sum = 0;
   let count = 0;
-  for (let y = start; y < end; y += 1) {
+  for (let y = 0; y < raster.height; y += 1) {
+    if (y < raster.height * start || y >= raster.height * end) continue;
     for (let x = 0; x < raster.width; x += 1) {
       const offset = (y * raster.width + x) * 3;
-      r += raster.data[offset]!;
-      g += raster.data[offset + 1]!;
-      b += raster.data[offset + 2]!;
+      const r = raster.data[offset]! / 255;
+      const g = raster.data[offset + 1]! / 255;
+      const b = raster.data[offset + 2]! / 255;
+      const max = Math.max(r, g, b);
+      if (b >= g && g >= r - 0.05) blueGreenPixels += 1;
+      const mean = (r + g + b) / 3;
+      if (mean > 0.75) brightPixels += 1;
       count += 1;
     }
   }
-  return { r: r / count, g: g / count, b: b / count };
+  if (count === 0) return 0;
+  return 0.5 * (blueGreenPixels / count) + 0.5 * (brightPixels / count);
 }
 
-function greenness(mean: ColourMean): number {
-  return mean.g - (mean.r + mean.b) / 2;
+function verticallyFlipped(raster: RgbRaster): RgbRaster {
+  const data = new Uint8Array(raster.data.length);
+  const rowLength = raster.width * 3;
+  for (let y = 0; y < raster.height; y += 1) {
+    const source = (raster.height - 1 - y) * rowLength;
+    data.set(raster.data.subarray(source, source + rowLength), y * rowLength);
+  }
+  return { width: raster.width, height: raster.height, data };
 }
 
-export function extractFeatures(raster: RgbRaster): SceneFeatures {
-  const sky = averageBand(raster, 0, Math.ceil(raster.height * 0.18));
-  const upper = averageBand(raster, 0, Math.ceil(raster.height * 0.4));
-  const ground = averageBand(raster, Math.floor(raster.height * 0.7), raster.height);
-  const overall = averageBand(raster, 0, raster.height);
-  let brightnessSum = 0;
-  let saturationSum = 0;
-  let snowPixels = 0;
-  let skyBluePixels = 0;
-  let aridPixels = 0;
-  let groundPixels = 0;
+function bandFraction(
+  raster: RgbRaster,
+  band: (x: number, y: number) => boolean,
+  cue: (r: number, g: number, b: number, max: number, min: number, sat: number, mean: number) => boolean,
+): number {
+  let count = 0;
+  let matches = 0;
   for (let y = 0; y < raster.height; y += 1) {
     for (let x = 0; x < raster.width; x += 1) {
+      if (!band(x, y)) continue;
       const offset = (y * raster.width + x) * 3;
-      const r = raster.data[offset]!;
-      const g = raster.data[offset + 1]!;
-      const b = raster.data[offset + 2]!;
+      const r = raster.data[offset]! / 255;
+      const g = raster.data[offset + 1]! / 255;
+      const b = raster.data[offset + 2]! / 255;
       const max = Math.max(r, g, b);
       const min = Math.min(r, g, b);
-      const brightness = (r + g + b) / 3;
-      const saturation = max === 0 ? 0 : (max - min) / max;
-      brightnessSum += brightness;
-      saturationSum += saturation;
-      if (brightness > 200 && saturation < 0.18) snowPixels += 1;
-      if (y < Math.ceil(raster.height * 0.4) && b > r * 1.08 && b > g * 1.02 && b > 90) {
-        skyBluePixels += 1;
-      }
-      if (y >= Math.floor(raster.height * 0.7)) {
-        groundPixels += 1;
-        if (r > g && g > b && r - b > 18 && brightness > 70) aridPixels += 1;
-      }
+      const sat = max === 0 ? 0 : (max - min) / max;
+      const mean = (r + g + b) / 3;
+      count += 1;
+      if (cue(r, g, b, max, min, sat, mean)) matches += 1;
     }
   }
-  const pixelCount = raster.width * raster.height;
-  const brightness = brightnessSum / pixelCount;
-  const saturation = saturationSum / pixelCount;
-  const groundBrightness = (ground.r + ground.g + ground.b) / 3;
-  const skyBlueFraction = skyBluePixels / Math.max(1, Math.ceil(raster.height * 0.4) * raster.width);
-  const aridScore = aridPixels / Math.max(1, groundPixels);
+  return count === 0 ? 0 : matches / count;
+}
+
+export function extractFeatures(input: RgbRaster): SceneFeatures {
+  const raster = skylike(input, 0.875, 1) > skylike(input, 0, 0.125) + 0.08
+    ? verticallyFlipped(input)
+    : input;
+  const whole = (): boolean => true;
+  const top = (_x: number, y: number): boolean => y < raster.height * 0.125;
+  const bottom = (_x: number, y: number): boolean => y >= raster.height * 0.875;
+  const ground = (_x: number, y: number): boolean => y >= raster.height * 0.625;
+  const road = (x: number, y: number): boolean =>
+    y >= raster.height * 0.708 && x >= raster.width * 0.333 && x < raster.width * 0.667;
+  const shoulder = (x: number, y: number): boolean =>
+    y >= raster.height * 0.625 && (x < raster.width * 0.29 || x >= raster.width * 0.71);
+  const green = (r: number, g: number, b: number): boolean => g > 1.04 * r && g > 1.04 * b;
   return {
-    sky,
-    upper,
-    ground,
-    overall,
-    brightness,
-    saturation,
-    groundGreenness: greenness(ground),
-    overallGreenness: greenness(overall),
-    skyBlueness: sky.b - (sky.r + sky.g) / 2,
-    snowScore: snowPixels / pixelCount,
-    aridScore,
-    waterSkyBlueScore: skyBlueFraction,
-    greyUrbanScore: Math.max(0, Math.min(1, 1 - saturation / 0.35)),
-    groundBrightness,
+    lush: bandFraction(raster, whole, (r, g, b, _max, _min, sat) => green(r, g, b) && sat > 0.18),
+    snow: bandFraction(raster, whole, (_r, _g, _b, max, _min, sat) => max > 0.80 && sat < 0.20),
+    arid: bandFraction(raster, whole, (r, g, b, _max, _min, sat) =>
+      r > 0.42 && r > 1.22 * g && g > 1.12 * b && sat > 0.12),
+    red: bandFraction(raster, shoulder, (r, g, b) =>
+      r > 0.28 && r > 1.40 * g && r > 1.60 * b),
+    pale: bandFraction(raster, whole, (_r, _g, _b, max, _min, sat) => max > 0.55 && sat < 0.25),
+    darkveg: bandFraction(raster, whole, (r, g, b, max) => green(r, g, b) && max < 0.35),
+    yellow: bandFraction(raster, road, (r, g, b) => r > 0.50 && g > 0.42 && b < r - 0.22),
+    whiteline: bandFraction(raster, road, (_r, _g, _b, max, min, _sat, mean) =>
+      mean > 0.62 && max - min < 0.22),
+    dry: bandFraction(raster, ground, (r, g, b, _max, _min, sat) => r > g && g > b && sat > 0.10),
   };
 }
 
-export function classifyScene(features: SceneFeatures): SceneClass {
-  if ((features.snowScore >= 0.22 && features.brightness > 135)
-    || (features.brightness > 210 && features.saturation < 0.16)) {
-    return 'snow/boreal';
-  }
-  if (features.groundGreenness >= 95
-    && features.overallGreenness >= 45
-    && features.brightness >= 135
-    && features.saturation >= 0.32) {
-    return 'tropical lush';
-  }
-  if (features.aridScore >= 0.48
-    && features.groundBrightness >= 90
-    && features.groundGreenness < 55
-    && (features.waterSkyBlueScore >= 0.12 || features.aridScore >= 0.68)) {
-    return 'arid/dry';
-  }
-  if (features.groundGreenness >= 3
-    && features.groundGreenness < 40
-    && features.groundBrightness >= 105
-    && features.brightness >= 110
-    && features.saturation >= 0.12) {
-    return 'mediterranean';
-  }
-  if (features.groundGreenness >= 15 && features.brightness >= 55) return 'temperate green';
-  if (features.saturation < 0.18 && features.overallGreenness < 20) return 'urban grey/overcast';
-  return 'fallback';
+function toVector(lat: number, lon: number): [number, number, number] {
+  const latitude = lat * Math.PI / 180;
+  const longitude = lon * Math.PI / 180;
+  return [
+    Math.cos(latitude) * Math.cos(longitude),
+    Math.cos(latitude) * Math.sin(longitude),
+    Math.sin(latitude),
+  ];
 }
 
-function hashBytes(bytes: Uint8Array, seed: number): number {
-  let hash = seed >>> 0;
-  for (const byte of bytes) {
-    hash ^= byte;
-    hash = Math.imul(hash, 0x01000193) >>> 0;
-    hash ^= hash >>> 13;
-  }
-  return hash >>> 0;
+function toCoordinates(vector: [number, number, number]): { lat: number; lon: number } {
+  const length = Math.hypot(vector[0], vector[1], vector[2]);
+  if (!Number.isFinite(length) || length < 1e-12) return { lat: 56.07, lon: 9.93 };
+  const x = vector[0] / length;
+  const y = vector[1] / length;
+  const z = vector[2] / length;
+  return {
+    lat: Math.atan2(z, Math.hypot(x, y)) * 180 / Math.PI,
+    lon: Math.atan2(y, x) * 180 / Math.PI,
+  };
 }
 
-export function locatePhoto(bytes: Uint8Array): { lat: number; lon: number; scene: SceneClass; features: SceneFeatures | null } {
-  try {
-    const raster = decodeJpegDc(bytes);
-    const features = raster === null ? null : extractFeatures(raster);
-    const scene = features === null ? 'fallback' : classifyScene(features);
-    const anchor = ANCHORS[scene];
-    const jitter = (seed: number): number => (seed / 0xffffffff) * 3 - 1.5;
-    const lat = anchor.lat + jitter(hashBytes(bytes, 0x811c9dc5));
-    const lon = anchor.lon + jitter(hashBytes(bytes, 0x9e3779b9));
-    return {
-      lat: Math.round(Math.max(-90, Math.min(90, lat)) * 1_000_000) / 1_000_000,
-      lon: Math.round(Math.max(-180, Math.min(180, lon)) * 1_000_000) / 1_000_000,
-      scene,
-      features,
-    };
-  } catch {
-    const anchor = ANCHORS.fallback;
-    const jitter = (seed: number): number => (seed / 0xffffffff) * 3 - 1.5;
-    return {
-      lat: Math.round((anchor.lat + jitter(hashBytes(bytes, 0x811c9dc5))) * 1_000_000) / 1_000_000,
-      lon: Math.round((anchor.lon + jitter(hashBytes(bytes, 0x9e3779b9))) * 1_000_000) / 1_000_000,
-      scene: 'fallback',
-      features: null,
-    };
+export function predictZones(features: SceneFeatures): { lat: number; lon: number } {
+  const zoneWeights = ZONES.map((zone) => {
+    const scoreTable = ZONE_CUE_SCORES[zone.name];
+    let score = 0;
+    if (scoreTable !== undefined) {
+      for (const cue of Object.keys(scoreTable) as (keyof SceneFeatures)[]) {
+        score += features[cue] * scoreTable[cue]!;
+      }
+    }
+    return { ...zone, weight: zone.prior * Math.exp(score / 1.4) };
+  });
+  let x = 0;
+  let y = 0;
+  let z = 0;
+  let totalWeight = 0;
+  for (const zone of zoneWeights) {
+    const vector = toVector(zone.lat, zone.lon);
+    x += zone.weight * vector[0];
+    y += zone.weight * vector[1];
+    z += zone.weight * vector[2];
+    totalWeight += zone.weight;
   }
+  if (!Number.isFinite(totalWeight) || totalWeight <= 0) return { lat: 56.07, lon: 9.93 };
+  const blended = toCoordinates([x / totalWeight, y / totalWeight, z / totalWeight]);
+  const answerVector = toVector(blended.lat, blended.lon);
+  const priorVector = toVector(56.07, 9.93);
+  const result = toCoordinates([
+    0.7 * answerVector[0] + 0.3 * priorVector[0],
+    0.7 * answerVector[1] + 0.3 * priorVector[1],
+    0.7 * answerVector[2] + 0.3 * priorVector[2],
+  ]);
+  return {
+    lat: Math.round(result.lat * 1_000_000) / 1_000_000,
+    lon: Math.round(result.lon * 1_000_000) / 1_000_000,
+  };
+}
+
+export function locatePhoto(bytes: Uint8Array): { lat: number; lon: number; features: SceneFeatures | null } {
+  const raster = decodeJpegDc(bytes);
+  if (raster === null) {
+    const fallback = predictZones({
+      lush: 0, snow: 0, arid: 0, red: 0, pale: 0, darkveg: 0, yellow: 0, whiteline: 0, dry: 0,
+    });
+    return { ...fallback, features: null };
+  }
+  const features = extractFeatures(raster);
+  return { ...predictZones(features), features };
 }
 
 interface Photo {
@@ -702,8 +738,7 @@ async function handlePhoto(envUrl: string, photo: Photo): Promise<Answer> {
     const position = locatePhoto(bytes);
     return { id: photo.id, lat: position.lat, lon: position.lon };
   } catch {
-    const fallback = ANCHORS.fallback;
-    return { id: photo.id, lat: fallback.lat, lon: fallback.lon };
+    return { id: photo.id, lat: 56.07, lon: 9.93 };
   }
 }
 

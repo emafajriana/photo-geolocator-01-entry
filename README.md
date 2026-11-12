@@ -1,7 +1,6 @@
-# Photo Geolocator
-The agent makes no model calls: it parses JPEG Huffman streams and reconstructs an RGB thumbnail from DC coefficients.
-It extracts sky, ground, greenery, saturation, snow, aridity, blue-sky, and greyscale features.
-Ordered threshold rules classify each scene to one of seven fixed geographic anchors.
-A deterministic byte hash adds bounded coordinate jitter, and malformed images use the jittered fallback anchor.
-The env driver fetches four photos concurrently and posts checked answers in ordered chunks of five.
-Baseline and progressive synthetic JPEG fixtures match downscaled PIL sky/ground means; the 25-photo stub replay matches.
+# Photo Geolocator v3
+Model-free geolocation from JPEG DC thumbnails, using normalized color and road/vegetation cues.
+An upside-down skylike test flips the raster before features are measured.
+Cue fractions weight nineteen worldwide zones, blended on the sphere using zone priors.
+The blended estimate is shrunk 70/30 toward the global prior at (56.07, 9.93) and rounded to six decimals.
+The deterministic env driver retains four concurrent photo fetches and checked sequential answer batches of five.
