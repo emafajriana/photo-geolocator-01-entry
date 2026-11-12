@@ -670,25 +670,28 @@ export function predictZones(features: SceneFeatures): { lat: number; lon: numbe
     }
     return { ...zone, weight: zone.prior * Math.exp(score / 1.4) };
   });
+  const totalWeight = zoneWeights.reduce((total, zone) => total + zone.weight, 0);
+  if (!Number.isFinite(totalWeight) || totalWeight <= 0) return { lat: 56.07, lon: 9.93 };
   let x = 0;
   let y = 0;
   let z = 0;
-  let totalWeight = 0;
+  let entropy = 0;
   for (const zone of zoneWeights) {
+    const probability = zone.weight / totalWeight;
     const vector = toVector(zone.lat, zone.lon);
-    x += zone.weight * vector[0];
-    y += zone.weight * vector[1];
-    z += zone.weight * vector[2];
-    totalWeight += zone.weight;
+    x += probability * vector[0];
+    y += probability * vector[1];
+    z += probability * vector[2];
+    entropy -= probability * Math.log(probability);
   }
-  if (!Number.isFinite(totalWeight) || totalWeight <= 0) return { lat: 56.07, lon: 9.93 };
-  const blended = toCoordinates([x / totalWeight, y / totalWeight, z / totalWeight]);
+  const shrink = 0.15 + 0.35 * (entropy / Math.log(ZONES.length));
+  const blended = toCoordinates([x, y, z]);
   const answerVector = toVector(blended.lat, blended.lon);
   const priorVector = toVector(56.07, 9.93);
   const result = toCoordinates([
-    0.7 * answerVector[0] + 0.3 * priorVector[0],
-    0.7 * answerVector[1] + 0.3 * priorVector[1],
-    0.7 * answerVector[2] + 0.3 * priorVector[2],
+    (1 - shrink) * answerVector[0] + shrink * priorVector[0],
+    (1 - shrink) * answerVector[1] + shrink * priorVector[1],
+    (1 - shrink) * answerVector[2] + shrink * priorVector[2],
   ]);
   return {
     lat: Math.round(result.lat * 1_000_000) / 1_000_000,
